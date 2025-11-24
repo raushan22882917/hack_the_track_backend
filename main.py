@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
+from starlette.middleware.base import BaseHTTPMiddleware
 import asyncio
 import json
 from json import JSONEncoder
@@ -141,26 +142,82 @@ if sys.platform == 'win32':
 app = FastAPI(title="Telemetry Rush API", version="2.0.0")
 
 # CORS middleware - must be added before exception handlers
+# Note: When allow_credentials=True, you cannot use allow_origins=["*"]
+# Must specify exact origins
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://race-frontend-m2zl.vercel.app",
+    # Add your production frontend URL here
+]
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
+# Add custom middleware to ensure CORS headers are always present
+# This runs AFTER CORSMiddleware to catch any cases where CORS headers might be missing
+class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        
+        # Get origin from request
+        origin = request.headers.get("origin", "")
+        
+        # Determine allowed origin
+        if origin in allowed_origins:
+            allowed_origin = origin
+        elif allowed_origins:
+            allowed_origin = allowed_origins[0]
+        else:
+            allowed_origin = "*"
+        
+        # Ensure CORS headers are present
+        response.headers["Access-Control-Allow-Origin"] = allowed_origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Expose-Headers"] = "*"
+        
+        # Handle OPTIONS preflight requests
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": allowed_origin,
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "3600",
+                }
+            )
+        
+        return response
+
+app.add_middleware(EnsureCORSHeadersMiddleware)
+
 # Exception handler to ensure CORS headers are added to error responses
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Ensure CORS headers are added to HTTP error responses"""
+    origin = request.headers.get("origin", "")
+    # Check if origin is in allowed list
+    allowed_origin = origin if origin in allowed_origins else allowed_origins[0] if allowed_origins else "*"
+    
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
         headers={
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -172,13 +229,18 @@ async def global_exception_handler(request: Request, exc: Exception):
     print(f"⚠️ Unhandled exception: {error_detail}")
     traceback.print_exc()
     
+    origin = request.headers.get("origin", "")
+    # Check if origin is in allowed list
+    allowed_origin = origin if origin in allowed_origins else allowed_origins[0] if allowed_origins else "*"
+    
     return JSONResponse(
         status_code=500,
         content={"detail": error_detail, "error": "Internal server error"},
         headers={
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
         }
     )
 
