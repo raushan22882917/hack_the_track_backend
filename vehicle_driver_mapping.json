@@ -1,0 +1,122 @@
+{
+  "GR86-002-000": {
+    "vehicle_number": 0,
+    "car_number": null,
+    "driver_number": null,
+    "has_endurance_data": false
+  },
+  "GR86-004-78": {
+    "vehicle_number": 78,
+    "car_number": null,
+    "driver_number": null,
+    "has_endurance_data": false
+  },
+  "GR86-006-7": {
+    "vehicle_number": 7,
+    "car_number": 7,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-010-16": {
+    "vehicle_number": 16,
+    "car_number": null,
+    "driver_number": null,
+    "has_endurance_data": false
+  },
+  "GR86-013-80": {
+    "vehicle_number": 80,
+    "car_number": 80,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-015-31": {
+    "vehicle_number": 31,
+    "car_number": 31,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-016-55": {
+    "vehicle_number": 55,
+    "car_number": 55,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-022-13": {
+    "vehicle_number": 13,
+    "car_number": 13,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-025-47": {
+    "vehicle_number": 47,
+    "car_number": 47,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-026-72": {
+    "vehicle_number": 72,
+    "car_number": 72,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-030-18": {
+    "vehicle_number": 18,
+    "car_number": 18,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-033-46": {
+    "vehicle_number": 46,
+    "car_number": 46,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-036-98": {
+    "vehicle_number": 98,
+    "car_number": 98,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-038-93": {
+    "vehicle_number": 93,
+    "car_number": 93,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-040-3": {
+    "vehicle_number": 3,
+    "car_number": 3,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-047-21": {
+    "vehicle_number": 21,
+    "car_number": 21,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-049-88": {
+    "vehicle_number": 88,
+    "car_number": 88,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-060-2": {
+    "vehicle_number": 2,
+    "car_number": 2,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-063-113": {
+    "vehicle_number": 113,
+    "car_number": 113,
+    "driver_number": 1,
+    "has_endurance_data": true
+  },
+  "GR86-065-5": {
+    "vehicle_number": 5,
+    "car_number": 5,
+    "driver_number": 1,
+    "has_endurance_data": true
+  }
+}
