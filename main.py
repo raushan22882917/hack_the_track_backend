@@ -1354,35 +1354,23 @@ async def get_vehicles(event_name: Optional[str] = None):
 @app.get("/api/telemetry")
 async def get_telemetry():
     """Get latest telemetry data - Poll this endpoint for updates"""
-    global telemetry_broadcast_task, telemetry_data_loaded, telemetry_rows
+    global telemetry_broadcast_task, telemetry_data_loaded, telemetry_rows, telemetry_cache
     
     try:
-        # Ensure data is loaded first (non-blocking check)
-        if not telemetry_data_loaded:
-            try:
-                await load_telemetry_data()
-            except Exception as e:
-                print(f"⚠️ Error loading telemetry data: {e}")
-                return {
-                    "message": f"Error loading telemetry data: {str(e)}",
-                    "has_data": False,
-                    "status": "error"
-                }
-        
-        # Start broadcast loop if not already running (non-blocking)
-        if telemetry_broadcast_task is None or telemetry_broadcast_task.done():
-            try:
-                telemetry_broadcast_task = asyncio.create_task(telemetry_broadcast_loop())
-                print("Started telemetry broadcast loop for REST API")
-            except Exception as e:
-                print(f"⚠️ Error starting telemetry broadcast loop: {e}")
-                # Don't fail the request if loop can't start
-        
+        # Return immediately if cache has data (fastest path)
         if telemetry_cache:
             return telemetry_cache
         
-        # Check if data is loaded but not started
+        # Check if data is loaded but not started (return immediately, don't wait)
         if telemetry_data_loaded and len(telemetry_rows) > 0:
+            # Start broadcast loop in background if not running (non-blocking)
+            if telemetry_broadcast_task is None or telemetry_broadcast_task.done():
+                try:
+                    telemetry_broadcast_task = asyncio.create_task(telemetry_broadcast_loop())
+                    print("Started telemetry broadcast loop for REST API")
+                except Exception as e:
+                    print(f"⚠️ Error starting telemetry broadcast loop: {e}")
+            
             return {
                 "message": "Telemetry data loaded but playback not started",
                 "row_count": len(telemetry_rows),
@@ -1390,6 +1378,18 @@ async def get_telemetry():
                 "paused": telemetry_is_paused,
                 "status": "ready",
                 "suggestion": "Poll /api/telemetry for updates. Use /api/control to start playback."
+            }
+        
+        # If data not loaded, return immediately without blocking
+        # Data loading happens in background during startup
+        if not telemetry_data_loaded:
+            # Don't try to load here - it's too slow and causes timeouts
+            # Data should be loaded during startup
+            return {
+                "message": "Telemetry data is loading in background",
+                "has_data": False,
+                "status": "loading",
+                "suggestion": "Poll /api/telemetry for updates. Data will be available once loading completes."
             }
         
         return {

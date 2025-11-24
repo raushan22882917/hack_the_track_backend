@@ -1,11 +1,11 @@
 steps:
   # Build Docker image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/hack-the-track-backend:$BUILD_ID', '.']
   
   # Push to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/hack-the-track-backend:$BUILD_ID']
   
   # Deploy to Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -13,7 +13,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'hack-the-track-backend'
-      - '--image=gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA'
+      - '--image=gcr.io/$PROJECT_ID/hack-the-track-backend:$BUILD_ID'
       - '--region=us-central1'
       - '--platform=managed'
       - '--allow-unauthenticated'
@@ -22,13 +22,12 @@ steps:
       - '--timeout=300'
       - '--max-instances=10'
       - '--min-instances=0'
-      - '--startup-cpu-boost'
-      - '--cpu-throttling'
+      - '--cpu-boost'
       - '--port=8080'
       - '--set-env-vars=PORT=8080'
 
 images:
-  - 'gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/hack-the-track-backend:$BUILD_ID'
 
 options:
   machineType: 'E2_HIGHCPU_8'
