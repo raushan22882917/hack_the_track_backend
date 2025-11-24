@@ -1304,44 +1304,61 @@ async def get_endurance():
 
 
 @app.get("/api/leaderboard")
+@app.get("/api/leaderboard/")  # Also handle trailing slash
 async def get_leaderboard():
     """Get leaderboard data - Poll this endpoint for updates"""
-    global leaderboard_broadcast_task
+    global leaderboard_broadcast_task, leaderboard_data_loaded, leaderboard_cache
     
     try:
+        print(f"📊 GET /api/leaderboard - Data loaded: {leaderboard_data_loaded}, Cache size: {len(leaderboard_cache)}")
+        
         # Start broadcast loop if not already running
         if leaderboard_broadcast_task is None or leaderboard_broadcast_task.done():
             try:
                 leaderboard_broadcast_task = asyncio.create_task(leaderboard_broadcast_loop())
-                print("Started leaderboard broadcast loop for REST API")
+                print("✅ Started leaderboard broadcast loop for REST API")
             except Exception as e:
                 print(f"⚠️ Error starting leaderboard broadcast loop: {e}")
+                import traceback
+                traceback.print_exc()
         
+        # Always return a valid response, even if data isn't loaded yet
         if not leaderboard_data_loaded:
+            print("⚠️ Leaderboard data not loaded yet, returning empty response")
             return {
                 "leaderboard": [],
                 "count": 0,
                 "message": "Leaderboard data not loaded",
-                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory"
+                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory",
+                "status": "loading"
             }
         
         if len(leaderboard_cache) == 0:
+            print("⚠️ Leaderboard cache is empty, returning empty response")
             return {
                 "leaderboard": [],
                 "count": 0,
                 "message": "No leaderboard entries in cache yet",
                 "has_data": True,
-                "suggestion": "Poll /api/leaderboard for updates"
+                "suggestion": "Poll /api/leaderboard for updates",
+                "status": "empty_cache"
             }
         
         # Clean NaN values before returning
         cleaned_cache = clean_nan_values(leaderboard_cache)
-        return {"leaderboard": cleaned_cache, "count": len(cleaned_cache)}
+        print(f"✅ Returning {len(cleaned_cache)} leaderboard entries")
+        return {
+            "leaderboard": cleaned_cache,
+            "count": len(cleaned_cache),
+            "status": "success"
+        }
     except Exception as e:
-        print(f"⚠️ Error in get_leaderboard endpoint: {e}")
+        error_msg = f"Error retrieving leaderboard: {str(e)}"
+        print(f"⚠️ Error in get_leaderboard endpoint: {error_msg}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error retrieving leaderboard: {str(e)}")
+        # Return 500 instead of 404 to indicate server error
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.post("/api/control")
@@ -2757,6 +2774,18 @@ async def startup_event():
     print("\n" + "="*60)
     print("Telemetry Rush - FastAPI Server (Integrated)")
     print("="*60)
+    
+    # Verify critical routes are registered
+    registered_routes = [route.path for route in app.routes if hasattr(route, 'path')]
+    leaderboard_routes = [r for r in registered_routes if 'leaderboard' in r.lower()]
+    print(f"\n📋 Registered routes containing 'leaderboard': {leaderboard_routes}")
+    
+    if '/api/leaderboard' not in registered_routes and '/api/leaderboard/' not in registered_routes:
+        print("⚠️ WARNING: /api/leaderboard route not found in registered routes!")
+        print(f"   Total routes registered: {len(registered_routes)}")
+        print(f"   Sample routes: {registered_routes[:10]}")
+    else:
+        print(f"✅ Leaderboard route confirmed: {[r for r in registered_routes if 'leaderboard' in r.lower()]}")
     
     # Start data loading in background (non-blocking) so server can start immediately
     # This is critical for Cloud Run which has startup timeout requirements
