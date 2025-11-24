@@ -141,23 +141,29 @@ if sys.platform == 'win32':
 
 app = FastAPI(title="Telemetry Rush API", version="2.0.0")
 
-# Add custom middleware FIRST to ensure CORS headers are always present
-# FastAPI applies middleware in reverse order (last added = first executed)
+# Add custom middleware to ensure CORS headers are always present
+# This middleware runs AFTER CORSMiddleware to ensure headers are always set
 class CORSHeaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         # Handle OPTIONS preflight requests immediately
         if request.method == "OPTIONS":
             origin = request.headers.get("origin", "*")
+            # Allow specific origins or all origins
+            allowed_origin = "*"
+            if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+                allowed_origin = origin
+            
             response = Response(
                 status_code=200,
                 headers={
-                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Origin": allowed_origin,
                     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
                     "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Max-Age": "3600",
                 }
             )
-            print(f"✅ Handled OPTIONS preflight for {request.url.path} from origin {origin}")
+            print(f"✅ Handled OPTIONS preflight for {request.url.path} from origin {origin} -> {allowed_origin}")
             return response
         
         # Process the request
@@ -166,57 +172,96 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             # Even on exceptions, ensure CORS headers are present
             print(f"⚠️ Exception in request handler: {e}")
+            import traceback
+            traceback.print_exc()
+            origin = request.headers.get("origin", "*")
+            allowed_origin = "*"
+            if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+                allowed_origin = origin
+            
             response = JSONResponse(
                 status_code=500,
                 content={"detail": str(e)},
                 headers={
-                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Origin": allowed_origin,
                     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
                     "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
                 }
             )
             return response
         
         # Ensure CORS headers are always present on all responses
         origin = request.headers.get("origin", "*")
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "*"
+        # Allow specific origins or all origins
+        allowed_origin = "*"
+        if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+            allowed_origin = origin
+        
+        cors_headers = {
+            "Access-Control-Allow-Origin": allowed_origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        }
+        
+        # Force set headers - create new headers dict if needed
+        if hasattr(response, 'headers'):
+            # Update headers dict directly
+            for key, value in cors_headers.items():
+                response.headers[key] = value
+        else:
+            # If response doesn't have headers attribute, wrap it
+            print(f"⚠️ Response type {type(response)} doesn't have headers attribute")
         
         # Log for debugging (only for API endpoints to avoid spam)
         if "/api/" in str(request.url.path):
             print(f"✅ Added CORS headers to {request.method} {request.url.path} (origin: {origin})")
+            # Debug: print actual headers
+            if hasattr(response, 'headers'):
+                print(f"   Headers after setting: {dict(response.headers)}")
         
         return response
 
-# Add custom middleware first (will be executed last)
-app.add_middleware(CORSHeaderMiddleware)
-
-# CORS middleware - must be added after custom middleware
-# Configure CORS to allow all origins for development and production
-# Note: When allow_credentials=True, we cannot use allow_origins=["*"]
-# So we set allow_credentials=False to allow all origins
+# CORS middleware - FastAPI's built-in CORS middleware
+# This runs FIRST (middleware is executed in reverse order)
+# Configure CORS to allow specific origins
+allowed_origins = [
+    "https://race-frontend-m2zl.vercel.app",  # Production frontend
+    "http://localhost:3000",  # Local development
+    "http://localhost:3001",  # Alternative local port
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Must be False when using "*" for origins
+    allow_origins=allowed_origins,  # Explicitly allow frontend origin
+    allow_credentials=True,  # Can be True when using specific origins
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Explicitly list methods
     allow_headers=["*"],  # Allow all headers
     expose_headers=["*"],  # Expose all headers
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
+# Add custom middleware AFTER CORSMiddleware (runs last, executes first)
+# This ensures CORS headers are always present even if CORSMiddleware fails
+app.add_middleware(CORSHeaderMiddleware)
+
 # Exception handler to ensure CORS headers are added to error responses
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Ensure CORS headers are added to HTTP error responses"""
+    origin = request.headers.get("origin", "*")
+    allowed_origin = "*"
+    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+        allowed_origin = origin
+    
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
         headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
             "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -228,13 +273,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     print(f"⚠️ Unhandled exception: {error_detail}")
     traceback.print_exc()
     
+    origin = request.headers.get("origin", "*")
+    allowed_origin = "*"
+    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+        allowed_origin = origin
+    
     return JSONResponse(
         status_code=500,
         content={"detail": error_detail, "error": "Internal server error"},
         headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
             "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -1188,14 +1239,20 @@ async def leaderboard_broadcast_loop():
 
 # Handle OPTIONS requests for CORS preflight
 @app.options("/{full_path:path}")
-async def options_handler(full_path: str):
+async def options_handler(full_path: str, request: Request):
     """Handle CORS preflight OPTIONS requests"""
+    origin = request.headers.get("origin", "*")
+    allowed_origin = "*"
+    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
+        allowed_origin = origin
+    
     return Response(
         status_code=200,
         headers={
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
             "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
             "Access-Control-Max-Age": "3600",
         }
     )
@@ -1219,6 +1276,15 @@ async def root():
         }
     }
 
+
+@app.get("/api/cors-test")
+async def cors_test():
+    """Test endpoint to verify CORS is working"""
+    return {
+        "message": "CORS test successful",
+        "cors_headers": "Should be present",
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.get("/api/health")
 async def health_check():
