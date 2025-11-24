@@ -1159,6 +1159,15 @@ async def health_check():
         if hasattr(r, 'path') and '/driver/' in r.path
     ]
     
+    # List all API routes for debugging
+    all_api_routes = [
+        r.path for r in app.routes 
+        if hasattr(r, 'path') and r.path.startswith('/api/')
+    ]
+    
+    # Check if leaderboard route exists
+    leaderboard_exists = '/api/leaderboard' in all_api_routes
+    
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -1167,7 +1176,9 @@ async def health_check():
             "endurance": endurance_data_loaded,
             "leaderboard": leaderboard_data_loaded
         },
-        "driver_routes": driver_routes
+        "driver_routes": driver_routes,
+        "api_routes": sorted(all_api_routes),
+        "leaderboard_route_exists": leaderboard_exists
     }
 
 
@@ -1304,7 +1315,6 @@ async def get_endurance():
 
 
 @app.get("/api/leaderboard")
-@app.get("/api/leaderboard/")  # Also handle trailing slash
 async def get_leaderboard():
     """Get leaderboard data - Poll this endpoint for updates"""
     global leaderboard_broadcast_task, leaderboard_data_loaded, leaderboard_cache
