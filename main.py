@@ -165,7 +165,40 @@ app.add_middleware(
 # This runs AFTER CORSMiddleware to catch any cases where CORS headers might be missing
 class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        response = await call_next(request)
+        # Handle OPTIONS preflight requests immediately
+        if request.method == "OPTIONS":
+            origin = request.headers.get("origin", "")
+            allowed_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+            
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": allowed_origin,
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "3600",
+                }
+            )
+        
+        # Process the request
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Even on exceptions, ensure CORS headers are present
+            origin = request.headers.get("origin", "")
+            allowed_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+            
+            return JSONResponse(
+                status_code=500,
+                content={"detail": str(e), "error": "Internal server error"},
+                headers={
+                    "Access-Control-Allow-Origin": allowed_origin,
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                }
+            )
         
         # Get origin from request
         origin = request.headers.get("origin", "")
@@ -178,25 +211,13 @@ class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
         else:
             allowed_origin = "*"
         
-        # Ensure CORS headers are present
-        response.headers["Access-Control-Allow-Origin"] = allowed_origin
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Expose-Headers"] = "*"
-        
-        # Handle OPTIONS preflight requests
-        if request.method == "OPTIONS":
-            return Response(
-                status_code=200,
-                headers={
-                    "Access-Control-Allow-Origin": allowed_origin,
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Max-Age": "3600",
-                }
-            )
+        # Ensure CORS headers are present (only if not already set by CORSMiddleware)
+        if "Access-Control-Allow-Origin" not in response.headers:
+            response.headers["Access-Control-Allow-Origin"] = allowed_origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Expose-Headers"] = "*"
         
         return response
 
@@ -1372,23 +1393,62 @@ async def get_telemetry():
 @app.get("/api/endurance")
 async def get_endurance():
     """Get endurance/lap event data - Poll this endpoint for updates"""
-    global endurance_broadcast_task
+    global endurance_broadcast_task, endurance_data_loaded, endurance_df, endurance_cache
     
     try:
-        # Start broadcast loop if not already running
+        # Ensure endurance_cache is initialized
+        if endurance_cache is None:
+            endurance_cache = []
+        
+        # Ensure data is loaded first (non-blocking check)
+        if not endurance_data_loaded:
+            try:
+                await load_endurance_data()
+            except Exception as e:
+                print(f"⚠️ Error loading endurance data: {e}")
+                return {
+                    "events": [],
+                    "count": 0,
+                    "status": "error",
+                    "message": f"Error loading endurance data: {str(e)}"
+                }
+        
+        # If data file doesn't exist or couldn't be loaded, return empty response
+        if not endurance_data_loaded or endurance_df is None or len(endurance_df) == 0:
+            return {
+                "events": [],
+                "count": 0,
+                "status": "no_data",
+                "message": "Endurance data not available yet"
+            }
+        
+        # Start broadcast loop if not already running (non-blocking)
         if endurance_broadcast_task is None or endurance_broadcast_task.done():
             try:
                 endurance_broadcast_task = asyncio.create_task(endurance_broadcast_loop())
                 print("Started endurance broadcast loop for REST API")
             except Exception as e:
                 print(f"⚠️ Error starting endurance broadcast loop: {e}")
+                # Don't fail the request if loop can't start - return what we have
         
-        return {"events": endurance_cache, "count": len(endurance_cache)}
+        # Always return a valid response, even if cache is empty
+        cache_size = len(endurance_cache) if endurance_cache else 0
+        return {
+            "events": endurance_cache if endurance_cache else [],
+            "count": cache_size,
+            "status": "ready" if cache_size > 0 else "loading"
+        }
     except Exception as e:
         print(f"⚠️ Error in get_endurance endpoint: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error retrieving endurance data: {str(e)}")
+        # Return 200 with error status instead of 500 to avoid 503 from proxies
+        return {
+            "events": [],
+            "count": 0,
+            "status": "error",
+            "message": f"Error retrieving endurance data: {str(e)}"
+        }
 
 
 @app.get("/api/leaderboard")
