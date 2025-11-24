@@ -17,6 +17,29 @@ if [ ! -f "main.py" ]; then
     exit 1
 fi
 
+# Decompress models if compressed file exists and models are not already extracted
+if [ -d "models" ] && [ -f "models/models_compressed.tar.gz" ]; then
+    echo "📦 Checking for compressed models..."
+    cd models
+    
+    # Check if any .pkl or .parquet files exist
+    pkl_count=$(ls *.pkl 2>/dev/null | wc -l)
+    parquet_count=$(ls *.parquet 2>/dev/null | wc -l)
+    
+    if [ "$pkl_count" -eq 0 ] && [ "$parquet_count" -eq 0 ]; then
+        echo "📦 Decompressing model files..."
+        tar -xzf models_compressed.tar.gz
+        if [ $? -eq 0 ]; then
+            echo "✅ Models decompressed successfully"
+        else
+            echo "⚠️ Warning: Failed to decompress models. Continuing anyway..."
+        fi
+    else
+        echo "✅ Model files already extracted ($pkl_count .pkl files, $parquet_count .parquet files)"
+    fi
+    cd ..
+fi
+
 # Start uvicorn server
 echo "Starting server on port $PORT..."
 echo "Working directory: $(pwd)"
