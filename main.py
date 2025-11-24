@@ -2788,9 +2788,6 @@ server_ready = False
 async def startup_event():
     """Initialize on startup - Pre-load all data for fast access (non-blocking)"""
     global server_ready
-    print("\n" + "="*60)
-    print("Telemetry Rush - FastAPI Server (Integrated)")
-    print("="*60)
     
     # Mark server as ready immediately - this allows health checks to pass
     # even while data is still loading in the background
@@ -2798,33 +2795,32 @@ async def startup_event():
     
     # Start data loading in background (non-blocking) so server can start immediately
     # This is critical for Cloud Run which has startup timeout requirements
-    print("\n🚀 Starting data pre-loading in background (non-blocking)...")
-    try:
-        asyncio.create_task(load_telemetry_data())
-        asyncio.create_task(load_endurance_data())
-        asyncio.create_task(load_leaderboard_data())
-        asyncio.create_task(load_predictive_models())
-    except Exception as e:
-        print(f"⚠️ Warning: Error starting background tasks: {e}")
-        print("⚠️ Server will continue running, but some features may not be available")
+    async def load_data_background():
+        """Background task to load data without blocking server startup"""
+        try:
+            print("🚀 Starting data pre-loading in background...")
+            await load_telemetry_data()
+        except Exception as e:
+            print(f"⚠️ Warning: Error loading telemetry data: {e}")
+        try:
+            await load_endurance_data()
+        except Exception as e:
+            print(f"⚠️ Warning: Error loading endurance data: {e}")
+        try:
+            await load_leaderboard_data()
+        except Exception as e:
+            print(f"⚠️ Warning: Error loading leaderboard data: {e}")
+        try:
+            await load_predictive_models()
+        except Exception as e:
+            print(f"⚠️ Warning: Error loading predictive models: {e}")
+        print("✅ Background data loading completed")
     
+    # Start background task immediately without waiting
+    asyncio.create_task(load_data_background())
+    
+    # Print startup info (non-blocking)
     print("✅ Server is ready and listening (data loading in background)")
-    print("\n✅ REST API Endpoints (Poll for updates):")
-    print("   GET  - http://127.0.0.1:8000/api/telemetry")
-    print("   GET  - http://127.0.0.1:8000/api/endurance")
-    print("   GET  - http://127.0.0.1:8000/api/leaderboard")
-    print("   GET  - http://127.0.0.1:8000/api/health")
-    print("   POST - http://127.0.0.1:8000/api/control (play/pause/speed/seek)")
-    print("   POST - http://127.0.0.1:8000/api/preprocess")
-    print("\n✅ Predictive Analysis Endpoints:")
-    print("   POST - http://127.0.0.1:8000/api/predictive/simulate-stint")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-vehicles")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-laps")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-final-results")
-    print("   POST - http://127.0.0.1:8000/api/predictive/predict-new-session")
-    print("\n✅ API Documentation: http://127.0.0.1:8000/docs")
-    print("\n💡 Note: Poll REST endpoints for real-time updates. Broadcast loops start automatically.")
-    print("="*60 + "\n")
 
 
 if __name__ == "__main__":

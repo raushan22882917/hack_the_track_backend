@@ -22,6 +22,10 @@ steps:
       - '--timeout=300'
       - '--max-instances=10'
       - '--min-instances=0'
+      - '--startup-cpu-boost'
+      - '--cpu-throttling'
+      - '--port=8080'
+      - '--set-env-vars=PORT=8080'
 
 images:
   - 'gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA'
