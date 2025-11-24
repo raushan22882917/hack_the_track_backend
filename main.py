@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
+from starlette.middleware.base import BaseHTTPMiddleware
 import asyncio
 import json
 from json import JSONEncoder
@@ -141,14 +142,31 @@ if sys.platform == 'win32':
 app = FastAPI(title="Telemetry Rush API", version="2.0.0")
 
 # CORS middleware - must be added before exception handlers
+# Configure CORS to allow all origins for development and production
+# Note: When allow_credentials=True, we cannot use allow_origins=["*"]
+# So we set allow_credentials=False to allow all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when using "*" for origins
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Explicitly list methods
+    allow_headers=["*"],  # Allow all headers
+    expose_headers=["*"],  # Expose all headers
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
+
+# Add middleware to ensure CORS headers are always present
+class CORSHeaderMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        # Ensure CORS headers are always present
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        # Note: Cannot set Access-Control-Allow-Credentials to true when Origin is *
+        return response
+
+app.add_middleware(CORSHeaderMiddleware)
 
 # Exception handler to ensure CORS headers are added to error responses
 @app.exception_handler(HTTPException)
@@ -1129,6 +1147,20 @@ async def leaderboard_broadcast_loop():
 
 
 # ==================== REST API ENDPOINTS ====================
+
+# Handle OPTIONS requests for CORS preflight
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight OPTIONS requests"""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "3600",
+        }
+    )
 
 @app.get("/")
 async def root():
