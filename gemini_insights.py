@@ -3,27 +3,11 @@ Gemini AI Integration for Enhanced Driver Insights
 Uses Google's Gemini API to generate intelligent, contextual recommendations
 """
 
-import os
 import json
 from typing import Dict, List, Optional
 from pathlib import Path
 import pandas as pd
 from fastapi import HTTPException
-
-# Try to load .env file if python-dotenv is available
-try:
-    from dotenv import load_dotenv
-    # Load .env file from project root
-    env_path = Path(__file__).parent / '.env'
-    if env_path.exists():
-        load_dotenv(env_path)
-        print(f"✅ Loaded .env file from {env_path}")
-    else:
-        # Try loading from current directory
-        load_dotenv()
-except ImportError:
-    # python-dotenv not installed, try to read from environment directly
-    pass
 
 try:
     import google.generativeai as genai  # type: ignore
@@ -35,20 +19,56 @@ except ImportError:
 
 
 def get_gemini_api_key() -> Optional[str]:
-    """Get Gemini API key from environment variable or .env file"""
-    # Try multiple environment variable names
-    api_key = (
-        os.getenv('GEMINI_API_KEY') or 
-        os.getenv('GOOGLE_API_KEY') or
-        os.getenv('VITE_GEMINI_API_KEY')  # Also check frontend env var name
-    )
+    """Get Gemini API key directly from .env file"""
+    # Try to find .env file in project root
+    env_path = Path(__file__).parent / '.env'
+    
+    # If not found, try current directory
+    if not env_path.exists():
+        env_path = Path('.env')
+    
+    api_key = None
+    
+    # Read directly from .env file
+    if env_path.exists():
+        try:
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Remove leading/trailing whitespace
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    # Try multiple possible variable names
+                    # Handle both KEY=value and KEY = value formats
+                    for var_name in ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'VITE_GEMINI_API_KEY']:
+                        if line.startswith(var_name):
+                            # Split on = and take everything after it
+                            parts = line.split('=', 1)
+                            if len(parts) == 2:
+                                api_key = parts[1].strip()
+                                # Remove quotes if present
+                                if api_key.startswith('"') and api_key.endswith('"'):
+                                    api_key = api_key[1:-1]
+                                elif api_key.startswith("'") and api_key.endswith("'"):
+                                    api_key = api_key[1:-1]
+                                # Only break if we found a non-empty value
+                                if api_key:
+                                    break
+                    if api_key:
+                        break
+        except Exception as e:
+            print(f"⚠️ Error reading .env file: {e}")
+            import traceback
+            traceback.print_exc()
     
     if not api_key:
-        print("⚠️ GEMINI_API_KEY not found in environment variables")
+        print("⚠️ GEMINI_API_KEY not found in .env file")
+        print(f"   Looking for .env file at: {env_path}")
         print("   Set it in .env file: GEMINI_API_KEY=your-api-key")
-        print("   Or export it: export GEMINI_API_KEY='your-api-key'")
     else:
-        print(f"✅ Found Gemini API key (length: {len(api_key)})")
+        print(f"✅ Found Gemini API key from .env file (length: {len(api_key)})")
     
     return api_key
 
@@ -195,7 +215,13 @@ Return ONLY valid JSON, no additional text."""
 
         # Generate response
         response = model.generate_content(prompt)
-        response_text = response.text.strip()
+        response_text = ""
+        
+        # Safely get response text
+        if hasattr(response, 'text'):
+            response_text = response.text.strip()
+        else:
+            response_text = str(response).strip()
         
         # Try to extract JSON from response (sometimes Gemini adds markdown formatting)
         if "```json" in response_text:
@@ -214,12 +240,13 @@ Return ONLY valid JSON, no additional text."""
         }
         
     except json.JSONDecodeError as e:
+        response_preview = response_text[:500] if response_text else "No response text available"
         print(f"⚠️ Failed to parse Gemini JSON response: {e}")
-        print(f"Response was: {response_text[:500]}")
+        print(f"Response was: {response_preview}")
         return {
             "enhanced": False,
             "error": "Failed to parse Gemini response",
-            "raw_response": response_text[:500]
+            "raw_response": response_preview
         }
     except Exception as e:
         error_str = str(e)
@@ -386,7 +413,13 @@ Format your response as JSON:
 Return ONLY valid JSON, no additional text."""
 
         response = model.generate_content(prompt)
-        response_text = response.text.strip()
+        response_text = ""
+        
+        # Safely get response text
+        if hasattr(response, 'text'):
+            response_text = response.text.strip()
+        else:
+            response_text = str(response).strip()
         
         # Extract JSON
         if "```json" in response_text:
@@ -405,6 +438,15 @@ Return ONLY valid JSON, no additional text."""
             "missed_opportunities": gemini_data.get("missed_opportunities", [])
         }
         
+    except json.JSONDecodeError as e:
+        response_preview = response_text[:500] if response_text else "No response text available"
+        print(f"⚠️ Failed to parse Gemini JSON response: {e}")
+        print(f"Response was: {response_preview}")
+        return {
+            "enhanced": False,
+            "error": "Failed to parse Gemini response",
+            "raw_response": response_preview
+        }
     except Exception as e:
         error_str = str(e)
         print(f"⚠️ Gemini race story error: {error_str}")
@@ -534,7 +576,13 @@ Format your response as JSON:
 Return ONLY valid JSON, no additional text."""
 
         response = model.generate_content(prompt)
-        response_text = response.text.strip()
+        response_text = ""
+        
+        # Safely get response text
+        if hasattr(response, 'text'):
+            response_text = response.text.strip()
+        else:
+            response_text = str(response).strip()
         
         # Extract JSON
         if "```json" in response_text:
@@ -553,6 +601,15 @@ Return ONLY valid JSON, no additional text."""
             "monitoring_points": gemini_data.get("monitoring_points", [])
         }
         
+    except json.JSONDecodeError as e:
+        response_preview = response_text[:500] if response_text else "No response text available"
+        print(f"⚠️ Failed to parse Gemini JSON response: {e}")
+        print(f"Response was: {response_preview}")
+        return {
+            "enhanced": False,
+            "error": "Failed to parse Gemini response",
+            "raw_response": response_preview
+        }
     except Exception as e:
         error_str = str(e)
         print(f"⚠️ Gemini real-time strategy error: {error_str}")

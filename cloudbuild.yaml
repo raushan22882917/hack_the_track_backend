@@ -12,7 +12,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'hack-the-track-backend'
+      - 'expo-command-executor'
       - '--image=gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA'
       - '--region=us-central1'
       - '--platform=managed'
