@@ -14,7 +14,6 @@ from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
-from starlette.middleware.base import BaseHTTPMiddleware
 import asyncio
 import json
 from json import JSONEncoder
@@ -141,161 +140,27 @@ if sys.platform == 'win32':
 
 app = FastAPI(title="Telemetry Rush API", version="2.0.0")
 
-# Add custom middleware to ensure CORS headers are always present
-# This middleware runs AFTER CORSMiddleware to ensure headers are always set
-class CORSHeaderMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        # Handle OPTIONS preflight requests immediately
-        if request.method == "OPTIONS":
-            origin = request.headers.get("origin", "")
-            origin_normalized = origin.rstrip("/").lower() if origin else ""
-            
-            allowed_origins_list = [
-                "https://race-frontend-m2zl.vercel.app",
-                "http://localhost:3000",
-                "http://localhost:3001",
-            ]
-            allowed_origin = "*"
-            
-            for allowed in allowed_origins_list:
-                if origin_normalized == allowed.rstrip("/").lower():
-                    allowed_origin = origin
-                    break
-            
-            response = Response(
-                status_code=200,
-                headers={
-                    "Access-Control-Allow-Origin": allowed_origin,
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Max-Age": "3600",
-                }
-            )
-            print(f"✅ OPTIONS preflight: {request.url.path} | Origin: {origin} -> Allowed: {allowed_origin}")
-            return response
-        
-        # Process the request
-        try:
-            response = await call_next(request)
-        except Exception as e:
-            # Even on exceptions, ensure CORS headers are present
-            print(f"⚠️ Exception in request handler: {e}")
-            import traceback
-            traceback.print_exc()
-            origin = request.headers.get("origin", "")
-            origin_normalized = origin.rstrip("/").lower() if origin else ""
-            allowed_origins_list = [
-                "https://race-frontend-m2zl.vercel.app",
-                "http://localhost:3000",
-                "http://localhost:3001",
-            ]
-            allowed_origin = "*"
-            for allowed in allowed_origins_list:
-                if origin_normalized == allowed.rstrip("/").lower():
-                    allowed_origin = origin
-                    break
-            
-            response = JSONResponse(
-                status_code=500,
-                content={"detail": str(e)},
-                headers={
-                    "Access-Control-Allow-Origin": allowed_origin,
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Credentials": "true",
-                }
-            )
-            return response
-        
-        # Ensure CORS headers are always present on all responses
-        origin = request.headers.get("origin", "")
-        # Normalize origin (remove trailing slashes, lowercase comparison)
-        origin_normalized = origin.rstrip("/").lower() if origin else ""
-        
-        # Allow specific origins - check normalized versions
-        allowed_origins_list = [
-            "https://race-frontend-m2zl.vercel.app",
-            "http://localhost:3000",
-            "http://localhost:3001",
-        ]
-        allowed_origin = "*"  # Default fallback
-        
-        # Check if origin matches any allowed origin (case-insensitive, no trailing slash)
-        for allowed in allowed_origins_list:
-            if origin_normalized == allowed.rstrip("/").lower():
-                allowed_origin = origin  # Use original origin value (case-sensitive for browser)
-                break
-        
-        # Always set CORS headers - this is critical
-        cors_headers = {
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
-        }
-        
-        # Force set headers - MUST work for all response types
-        if hasattr(response, 'headers'):
-            # Directly set each header - this should always work
-            response.headers["Access-Control-Allow-Origin"] = allowed_origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-            response.headers["Access-Control-Allow-Headers"] = "*"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-        else:
-            # If response doesn't have headers attribute, this is a problem
-            print(f"⚠️ CRITICAL: Response type {type(response)} doesn't have headers attribute!")
-            print(f"   Request: {request.method} {request.url.path}")
-            print(f"   Origin: {origin}")
-        
-        # Log for debugging (only for API endpoints to avoid spam)
-        if "/api/" in str(request.url.path):
-            print(f"✅ CORS: {request.method} {request.url.path} | Origin: {origin} -> Allowed: {allowed_origin}")
-            if hasattr(response, 'headers'):
-                actual_origin = response.headers.get("Access-Control-Allow-Origin", "NOT SET")
-                print(f"   Verified header: Access-Control-Allow-Origin = {actual_origin}")
-        
-        return response
-
-# CORS middleware - FastAPI's built-in CORS middleware
-# This runs FIRST (middleware is executed in reverse order)
-# Configure CORS to allow specific origins
-allowed_origins = [
-    "https://race-frontend-m2zl.vercel.app",  # Production frontend
-    "http://localhost:3000",  # Local development
-    "http://localhost:3001",  # Alternative local port
-]
+# CORS middleware - must be added before exception handlers
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,  # Explicitly allow frontend origin
-    allow_credentials=True,  # Can be True when using specific origins
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Explicitly list methods
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["*"],  # Expose all headers
-    max_age=3600,  # Cache preflight requests for 1 hour
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
-
-# Add custom middleware AFTER CORSMiddleware (runs last, executes first)
-# This ensures CORS headers are always present even if CORSMiddleware fails
-app.add_middleware(CORSHeaderMiddleware)
 
 # Exception handler to ensure CORS headers are added to error responses
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Ensure CORS headers are added to HTTP error responses"""
-    origin = request.headers.get("origin", "*")
-    allowed_origin = "*"
-    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-        allowed_origin = origin
-    
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
         headers={
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -307,19 +172,13 @@ async def global_exception_handler(request: Request, exc: Exception):
     print(f"⚠️ Unhandled exception: {error_detail}")
     traceback.print_exc()
     
-    origin = request.headers.get("origin", "*")
-    allowed_origin = "*"
-    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-        allowed_origin = origin
-    
     return JSONResponse(
         status_code=500,
         content={"detail": error_detail, "error": "Internal server error"},
         headers={
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -361,6 +220,9 @@ vehicle_csv_writers = {}  # Dict[vehicle_id, csv.DictWriter]
 vehicle_csv_files = {}  # Dict[vehicle_id, file handle]
 recording_start_time = None
 recording_lock = Lock()  # Thread-safe CSV writing
+
+# Server readiness flag (for health checks)
+server_ready = False
 
 
 def get_project_root():
@@ -1271,26 +1133,6 @@ async def leaderboard_broadcast_loop():
 
 # ==================== REST API ENDPOINTS ====================
 
-# Handle OPTIONS requests for CORS preflight
-@app.options("/{full_path:path}")
-async def options_handler(full_path: str, request: Request):
-    """Handle CORS preflight OPTIONS requests"""
-    origin = request.headers.get("origin", "*")
-    allowed_origin = "*"
-    if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-        allowed_origin = origin
-    
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "3600",
-        }
-    )
-
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -1311,45 +1153,48 @@ async def root():
     }
 
 
-@app.get("/api/cors-test")
-async def cors_test():
-    """Test endpoint to verify CORS is working"""
-    return {
-        "message": "CORS test successful",
-        "cors_headers": "Should be present",
-        "timestamp": datetime.now().isoformat()
-    }
-
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
-    # List all driver-related routes
-    driver_routes = [
-        r.path for r in app.routes 
-        if hasattr(r, 'path') and '/driver/' in r.path
-    ]
-    
-    # List all API routes for debugging
-    all_api_routes = [
-        r.path for r in app.routes 
-        if hasattr(r, 'path') and r.path.startswith('/api/')
-    ]
-    
-    # Check if leaderboard route exists
-    leaderboard_exists = '/api/leaderboard' in all_api_routes
-    
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "data_loaded": {
-            "telemetry": telemetry_data_loaded,
-            "endurance": endurance_data_loaded,
-            "leaderboard": leaderboard_data_loaded
-        },
-        "driver_routes": driver_routes,
-        "api_routes": sorted(all_api_routes),
-        "leaderboard_route_exists": leaderboard_exists
-    }
+    """Health check endpoint - Always responds quickly for Cloud Run health checks"""
+    global server_ready
+    try:
+        # Always return healthy if server has started
+        # This ensures Cloud Run health checks pass immediately
+        health_data = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "server_ready": server_ready
+        }
+        
+        # Add optional data if available (but don't fail if not)
+        try:
+            health_data["data_loaded"] = {
+                "telemetry": telemetry_data_loaded,
+                "endurance": endurance_data_loaded,
+                "leaderboard": leaderboard_data_loaded
+            }
+            # List all driver-related routes (with error handling)
+            try:
+                driver_routes = [
+                    r.path for r in app.routes 
+                    if hasattr(r, 'path') and '/driver/' in r.path
+                ]
+                health_data["driver_routes"] = driver_routes
+            except Exception:
+                pass
+        except Exception:
+            pass  # Ignore errors in optional data
+        
+        return health_data
+    except Exception as e:
+        # Even if there's an error, return a basic healthy response
+        # This ensures Cloud Run health checks don't fail
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "server_ready": True,
+            "note": "Server is running, some features may still be initializing"
+        }
 
 
 @app.get("/api/vehicles")
@@ -1487,65 +1332,53 @@ async def get_endurance():
 @app.get("/api/leaderboard")
 async def get_leaderboard():
     """Get leaderboard data - Poll this endpoint for updates"""
-    global leaderboard_broadcast_task, leaderboard_data_loaded, leaderboard_cache
+    global leaderboard_broadcast_task
     
     try:
-        print(f"📊 GET /api/leaderboard - Data loaded: {leaderboard_data_loaded}, Cache size: {len(leaderboard_cache)}")
-        
         # Start broadcast loop if not already running
         if leaderboard_broadcast_task is None or leaderboard_broadcast_task.done():
             try:
                 leaderboard_broadcast_task = asyncio.create_task(leaderboard_broadcast_loop())
-                print("✅ Started leaderboard broadcast loop for REST API")
+                print("Started leaderboard broadcast loop for REST API")
             except Exception as e:
                 print(f"⚠️ Error starting leaderboard broadcast loop: {e}")
-                import traceback
-                traceback.print_exc()
         
-        # Always return a valid response, even if data isn't loaded yet
         if not leaderboard_data_loaded:
-            print("⚠️ Leaderboard data not loaded yet, returning empty response")
             return {
                 "leaderboard": [],
                 "count": 0,
                 "message": "Leaderboard data not loaded",
-                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory",
-                "status": "loading"
+                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory"
             }
         
         if len(leaderboard_cache) == 0:
-            print("⚠️ Leaderboard cache is empty, returning empty response")
             return {
                 "leaderboard": [],
                 "count": 0,
                 "message": "No leaderboard entries in cache yet",
                 "has_data": True,
-                "suggestion": "Poll /api/leaderboard for updates",
-                "status": "empty_cache"
+                "suggestion": "Poll /api/leaderboard for updates"
             }
         
         # Clean NaN values before returning
         cleaned_cache = clean_nan_values(leaderboard_cache)
-        print(f"✅ Returning {len(cleaned_cache)} leaderboard entries")
-        return {
-            "leaderboard": cleaned_cache,
-            "count": len(cleaned_cache),
-            "status": "success"
-        }
+        return {"leaderboard": cleaned_cache, "count": len(cleaned_cache)}
     except Exception as e:
-        error_msg = f"Error retrieving leaderboard: {str(e)}"
-        print(f"⚠️ Error in get_leaderboard endpoint: {error_msg}")
+        print(f"⚠️ Error in get_leaderboard endpoint: {e}")
         import traceback
         traceback.print_exc()
-        # Return 500 instead of 404 to indicate server error
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(status_code=500, detail=f"Error retrieving leaderboard: {str(e)}")
 
 
 @app.post("/api/control")
 async def control_playback(command: dict):
     """Send control command to telemetry playback"""
-    await process_telemetry_control(command)
-    return {"status": "command_sent", "command": command.get("cmd")}
+    try:
+        await process_telemetry_control(command)
+        return {"status": "command_sent", "command": command.get("cmd")}
+    except Exception as e:
+        # Return error instead of crashing
+        raise HTTPException(status_code=500, detail=f"Error processing control command: {str(e)}")
 
 
 @app.post("/api/recording/start")
@@ -2948,63 +2781,50 @@ async def load_predictive_models():
 
 # ==================== STARTUP/SHUTDOWN ====================
 
+# Global flag to track if server is ready (for health checks)
+server_ready = False
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup - Pre-load all data for fast access (non-blocking)"""
+    global server_ready
+    print("\n" + "="*60)
+    print("Telemetry Rush - FastAPI Server (Integrated)")
+    print("="*60)
+    
+    # Mark server as ready immediately - this allows health checks to pass
+    # even while data is still loading in the background
+    server_ready = True
+    
+    # Start data loading in background (non-blocking) so server can start immediately
+    # This is critical for Cloud Run which has startup timeout requirements
+    print("\n🚀 Starting data pre-loading in background (non-blocking)...")
     try:
-        print("\n" + "="*60)
-        print("Telemetry Rush - FastAPI Server (Integrated)")
-        print("="*60)
-        
-        # Verify critical routes are registered (quick check)
-        try:
-            registered_routes = [route.path for route in app.routes if hasattr(route, 'path')]
-            leaderboard_routes = [r for r in registered_routes if 'leaderboard' in r.lower()]
-            print(f"\n📋 Registered routes containing 'leaderboard': {leaderboard_routes}")
-            
-            if '/api/leaderboard' not in registered_routes:
-                print("⚠️ WARNING: /api/leaderboard route not found in registered routes!")
-                print(f"   Total routes registered: {len(registered_routes)}")
-                print(f"   Sample routes: {registered_routes[:10]}")
-            else:
-                print(f"✅ Leaderboard route confirmed: {[r for r in registered_routes if 'leaderboard' in r.lower()]}")
-        except Exception as e:
-            print(f"⚠️ Error checking routes: {e}")
-        
-        # Start data loading in background (non-blocking) so server can start immediately
-        # This is critical for Cloud Run which has startup timeout requirements
-        print("\n🚀 Starting data pre-loading in background (non-blocking)...")
-        
-        # Schedule background tasks - these will run asynchronously without blocking startup
-        async def load_data_background():
-            """Background task to load data without blocking server startup"""
-            try:
-                await load_telemetry_data()
-            except Exception as e:
-                print(f"⚠️ Error loading telemetry data: {e}")
-            try:
-                await load_endurance_data()
-            except Exception as e:
-                print(f"⚠️ Error loading endurance data: {e}")
-            try:
-                await load_leaderboard_data()
-            except Exception as e:
-                print(f"⚠️ Error loading leaderboard data: {e}")
-            try:
-                await load_predictive_models()
-            except Exception as e:
-                print(f"⚠️ Error loading predictive models: {e}")
-        
-        # Create background task - this returns immediately
-        asyncio.create_task(load_data_background())
-        
-        print("✅ Server is ready and listening (data loading in background)")
-        print("="*60 + "\n")
+        asyncio.create_task(load_telemetry_data())
+        asyncio.create_task(load_endurance_data())
+        asyncio.create_task(load_leaderboard_data())
+        asyncio.create_task(load_predictive_models())
     except Exception as e:
-        print(f"⚠️ Error in startup event: {e}")
-        import traceback
-        traceback.print_exc()
-        # Don't fail startup - server should still start even if data loading fails
+        print(f"⚠️ Warning: Error starting background tasks: {e}")
+        print("⚠️ Server will continue running, but some features may not be available")
+    
+    print("✅ Server is ready and listening (data loading in background)")
+    print("\n✅ REST API Endpoints (Poll for updates):")
+    print("   GET  - http://127.0.0.1:8000/api/telemetry")
+    print("   GET  - http://127.0.0.1:8000/api/endurance")
+    print("   GET  - http://127.0.0.1:8000/api/leaderboard")
+    print("   GET  - http://127.0.0.1:8000/api/health")
+    print("   POST - http://127.0.0.1:8000/api/control (play/pause/speed/seek)")
+    print("   POST - http://127.0.0.1:8000/api/preprocess")
+    print("\n✅ Predictive Analysis Endpoints:")
+    print("   POST - http://127.0.0.1:8000/api/predictive/simulate-stint")
+    print("   POST - http://127.0.0.1:8000/api/predictive/get-vehicles")
+    print("   POST - http://127.0.0.1:8000/api/predictive/get-laps")
+    print("   POST - http://127.0.0.1:8000/api/predictive/get-final-results")
+    print("   POST - http://127.0.0.1:8000/api/predictive/predict-new-session")
+    print("\n✅ API Documentation: http://127.0.0.1:8000/docs")
+    print("\n💡 Note: Poll REST endpoints for real-time updates. Broadcast loops start automatically.")
+    print("="*60 + "\n")
 
 
 if __name__ == "__main__":

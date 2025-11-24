@@ -12,7 +12,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'expo-command-executor'
+      - 'hack-the-track-backend'
       - '--image=gcr.io/$PROJECT_ID/hack-the-track-backend:$SHORT_SHA'
       - '--region=us-central1'
       - '--platform=managed'
@@ -29,4 +29,6 @@ images:
 options:
   machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
+
+
 
