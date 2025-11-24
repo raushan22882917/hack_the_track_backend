@@ -24,7 +24,6 @@ steps:
       - '--min-instances=0'
       - '--cpu-boost'
       - '--port=8080'
-      - '--set-env-vars=PORT=8080'
 
 images:
   - 'gcr.io/$PROJECT_ID/hack-the-track-backend:$BUILD_ID'
