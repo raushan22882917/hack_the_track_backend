@@ -147,11 +147,20 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         # Handle OPTIONS preflight requests immediately
         if request.method == "OPTIONS":
-            origin = request.headers.get("origin", "*")
-            # Allow specific origins or all origins
+            origin = request.headers.get("origin", "")
+            origin_normalized = origin.rstrip("/").lower() if origin else ""
+            
+            allowed_origins_list = [
+                "https://race-frontend-m2zl.vercel.app",
+                "http://localhost:3000",
+                "http://localhost:3001",
+            ]
             allowed_origin = "*"
-            if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-                allowed_origin = origin
+            
+            for allowed in allowed_origins_list:
+                if origin_normalized == allowed.rstrip("/").lower():
+                    allowed_origin = origin
+                    break
             
             response = Response(
                 status_code=200,
@@ -163,7 +172,7 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
                     "Access-Control-Max-Age": "3600",
                 }
             )
-            print(f"✅ Handled OPTIONS preflight for {request.url.path} from origin {origin} -> {allowed_origin}")
+            print(f"✅ OPTIONS preflight: {request.url.path} | Origin: {origin} -> Allowed: {allowed_origin}")
             return response
         
         # Process the request
@@ -174,10 +183,18 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
             print(f"⚠️ Exception in request handler: {e}")
             import traceback
             traceback.print_exc()
-            origin = request.headers.get("origin", "*")
+            origin = request.headers.get("origin", "")
+            origin_normalized = origin.rstrip("/").lower() if origin else ""
+            allowed_origins_list = [
+                "https://race-frontend-m2zl.vercel.app",
+                "http://localhost:3000",
+                "http://localhost:3001",
+            ]
             allowed_origin = "*"
-            if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-                allowed_origin = origin
+            for allowed in allowed_origins_list:
+                if origin_normalized == allowed.rstrip("/").lower():
+                    allowed_origin = origin
+                    break
             
             response = JSONResponse(
                 status_code=500,
@@ -192,12 +209,25 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
             return response
         
         # Ensure CORS headers are always present on all responses
-        origin = request.headers.get("origin", "*")
-        # Allow specific origins or all origins
-        allowed_origin = "*"
-        if origin in ["https://race-frontend-m2zl.vercel.app", "http://localhost:3000", "http://localhost:3001"]:
-            allowed_origin = origin
+        origin = request.headers.get("origin", "")
+        # Normalize origin (remove trailing slashes, lowercase comparison)
+        origin_normalized = origin.rstrip("/").lower() if origin else ""
         
+        # Allow specific origins - check normalized versions
+        allowed_origins_list = [
+            "https://race-frontend-m2zl.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:3001",
+        ]
+        allowed_origin = "*"  # Default fallback
+        
+        # Check if origin matches any allowed origin (case-insensitive, no trailing slash)
+        for allowed in allowed_origins_list:
+            if origin_normalized == allowed.rstrip("/").lower():
+                allowed_origin = origin  # Use original origin value (case-sensitive for browser)
+                break
+        
+        # Always set CORS headers - this is critical
         cors_headers = {
             "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
@@ -205,21 +235,25 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
             "Access-Control-Allow-Credentials": "true",
         }
         
-        # Force set headers - create new headers dict if needed
+        # Force set headers - MUST work for all response types
         if hasattr(response, 'headers'):
-            # Update headers dict directly
-            for key, value in cors_headers.items():
-                response.headers[key] = value
+            # Directly set each header - this should always work
+            response.headers["Access-Control-Allow-Origin"] = allowed_origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
         else:
-            # If response doesn't have headers attribute, wrap it
-            print(f"⚠️ Response type {type(response)} doesn't have headers attribute")
+            # If response doesn't have headers attribute, this is a problem
+            print(f"⚠️ CRITICAL: Response type {type(response)} doesn't have headers attribute!")
+            print(f"   Request: {request.method} {request.url.path}")
+            print(f"   Origin: {origin}")
         
         # Log for debugging (only for API endpoints to avoid spam)
         if "/api/" in str(request.url.path):
-            print(f"✅ Added CORS headers to {request.method} {request.url.path} (origin: {origin})")
-            # Debug: print actual headers
+            print(f"✅ CORS: {request.method} {request.url.path} | Origin: {origin} -> Allowed: {allowed_origin}")
             if hasattr(response, 'headers'):
-                print(f"   Headers after setting: {dict(response.headers)}")
+                actual_origin = response.headers.get("Access-Control-Allow-Origin", "NOT SET")
+                print(f"   Verified header: Access-Control-Allow-Origin = {actual_origin}")
         
         return response
 
