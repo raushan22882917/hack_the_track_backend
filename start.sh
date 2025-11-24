@@ -45,7 +45,16 @@ echo "Starting server on port $PORT..."
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
 echo "Uvicorn version: $(uvicorn --version 2>&1 || echo 'not found')"
+echo "PORT environment variable: $PORT"
+
+# Verify Python can import the app
+echo "Testing app import..."
+python -c "import main; print('✅ App imported successfully')" || {
+    echo "❌ Failed to import app module"
+    exit 1
+}
 
 # Use exec to replace shell process with uvicorn
-exec uvicorn main:app --host 0.0.0.0 --port "$PORT" --log-level info
+# Use --timeout-keep-alive to prevent connection timeouts
+exec uvicorn main:app --host 0.0.0.0 --port "$PORT" --log-level info --timeout-keep-alive 30
 

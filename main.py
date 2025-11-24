@@ -2781,47 +2781,60 @@ async def load_predictive_models():
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup - Pre-load all data for fast access (non-blocking)"""
-    print("\n" + "="*60)
-    print("Telemetry Rush - FastAPI Server (Integrated)")
-    print("="*60)
-    
-    # Verify critical routes are registered
-    registered_routes = [route.path for route in app.routes if hasattr(route, 'path')]
-    leaderboard_routes = [r for r in registered_routes if 'leaderboard' in r.lower()]
-    print(f"\n📋 Registered routes containing 'leaderboard': {leaderboard_routes}")
-    
-    if '/api/leaderboard' not in registered_routes and '/api/leaderboard/' not in registered_routes:
-        print("⚠️ WARNING: /api/leaderboard route not found in registered routes!")
-        print(f"   Total routes registered: {len(registered_routes)}")
-        print(f"   Sample routes: {registered_routes[:10]}")
-    else:
-        print(f"✅ Leaderboard route confirmed: {[r for r in registered_routes if 'leaderboard' in r.lower()]}")
-    
-    # Start data loading in background (non-blocking) so server can start immediately
-    # This is critical for Cloud Run which has startup timeout requirements
-    print("\n🚀 Starting data pre-loading in background (non-blocking)...")
-    asyncio.create_task(load_telemetry_data())
-    asyncio.create_task(load_endurance_data())
-    asyncio.create_task(load_leaderboard_data())
-    asyncio.create_task(load_predictive_models())
-    
-    print("✅ Server is ready and listening (data loading in background)")
-    print("\n✅ REST API Endpoints (Poll for updates):")
-    print("   GET  - http://127.0.0.1:8000/api/telemetry")
-    print("   GET  - http://127.0.0.1:8000/api/endurance")
-    print("   GET  - http://127.0.0.1:8000/api/leaderboard")
-    print("   GET  - http://127.0.0.1:8000/api/health")
-    print("   POST - http://127.0.0.1:8000/api/control (play/pause/speed/seek)")
-    print("   POST - http://127.0.0.1:8000/api/preprocess")
-    print("\n✅ Predictive Analysis Endpoints:")
-    print("   POST - http://127.0.0.1:8000/api/predictive/simulate-stint")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-vehicles")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-laps")
-    print("   POST - http://127.0.0.1:8000/api/predictive/get-final-results")
-    print("   POST - http://127.0.0.1:8000/api/predictive/predict-new-session")
-    print("\n✅ API Documentation: http://127.0.0.1:8000/docs")
-    print("\n💡 Note: Poll REST endpoints for real-time updates. Broadcast loops start automatically.")
-    print("="*60 + "\n")
+    try:
+        print("\n" + "="*60)
+        print("Telemetry Rush - FastAPI Server (Integrated)")
+        print("="*60)
+        
+        # Verify critical routes are registered (quick check)
+        try:
+            registered_routes = [route.path for route in app.routes if hasattr(route, 'path')]
+            leaderboard_routes = [r for r in registered_routes if 'leaderboard' in r.lower()]
+            print(f"\n📋 Registered routes containing 'leaderboard': {leaderboard_routes}")
+            
+            if '/api/leaderboard' not in registered_routes:
+                print("⚠️ WARNING: /api/leaderboard route not found in registered routes!")
+                print(f"   Total routes registered: {len(registered_routes)}")
+                print(f"   Sample routes: {registered_routes[:10]}")
+            else:
+                print(f"✅ Leaderboard route confirmed: {[r for r in registered_routes if 'leaderboard' in r.lower()]}")
+        except Exception as e:
+            print(f"⚠️ Error checking routes: {e}")
+        
+        # Start data loading in background (non-blocking) so server can start immediately
+        # This is critical for Cloud Run which has startup timeout requirements
+        print("\n🚀 Starting data pre-loading in background (non-blocking)...")
+        
+        # Schedule background tasks - these will run asynchronously without blocking startup
+        async def load_data_background():
+            """Background task to load data without blocking server startup"""
+            try:
+                await load_telemetry_data()
+            except Exception as e:
+                print(f"⚠️ Error loading telemetry data: {e}")
+            try:
+                await load_endurance_data()
+            except Exception as e:
+                print(f"⚠️ Error loading endurance data: {e}")
+            try:
+                await load_leaderboard_data()
+            except Exception as e:
+                print(f"⚠️ Error loading leaderboard data: {e}")
+            try:
+                await load_predictive_models()
+            except Exception as e:
+                print(f"⚠️ Error loading predictive models: {e}")
+        
+        # Create background task - this returns immediately
+        asyncio.create_task(load_data_background())
+        
+        print("✅ Server is ready and listening (data loading in background)")
+        print("="*60 + "\n")
+    except Exception as e:
+        print(f"⚠️ Error in startup event: {e}")
+        import traceback
+        traceback.print_exc()
+        # Don't fail startup - server should still start even if data loading fails
 
 
 if __name__ == "__main__":
