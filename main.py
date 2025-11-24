@@ -141,7 +141,58 @@ if sys.platform == 'win32':
 
 app = FastAPI(title="Telemetry Rush API", version="2.0.0")
 
-# CORS middleware - must be added before exception handlers
+# Add custom middleware FIRST to ensure CORS headers are always present
+# FastAPI applies middleware in reverse order (last added = first executed)
+class CORSHeaderMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # Handle OPTIONS preflight requests immediately
+        if request.method == "OPTIONS":
+            origin = request.headers.get("origin", "*")
+            response = Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "3600",
+                }
+            )
+            print(f"✅ Handled OPTIONS preflight for {request.url.path} from origin {origin}")
+            return response
+        
+        # Process the request
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Even on exceptions, ensure CORS headers are present
+            print(f"⚠️ Exception in request handler: {e}")
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": str(e)},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+            return response
+        
+        # Ensure CORS headers are always present on all responses
+        origin = request.headers.get("origin", "*")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        
+        # Log for debugging (only for API endpoints to avoid spam)
+        if "/api/" in str(request.url.path):
+            print(f"✅ Added CORS headers to {request.method} {request.url.path} (origin: {origin})")
+        
+        return response
+
+# Add custom middleware first (will be executed last)
+app.add_middleware(CORSHeaderMiddleware)
+
+# CORS middleware - must be added after custom middleware
 # Configure CORS to allow all origins for development and production
 # Note: When allow_credentials=True, we cannot use allow_origins=["*"]
 # So we set allow_credentials=False to allow all origins
@@ -154,19 +205,6 @@ app.add_middleware(
     expose_headers=["*"],  # Expose all headers
     max_age=3600,  # Cache preflight requests for 1 hour
 )
-
-# Add middleware to ensure CORS headers are always present
-class CORSHeaderMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        # Ensure CORS headers are always present
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        # Note: Cannot set Access-Control-Allow-Credentials to true when Origin is *
-        return response
-
-app.add_middleware(CORSHeaderMiddleware)
 
 # Exception handler to ensure CORS headers are added to error responses
 @app.exception_handler(HTTPException)
