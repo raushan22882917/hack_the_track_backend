@@ -1549,22 +1549,18 @@ async def control_playback(command: dict):
     global telemetry_data_loaded, telemetry_rows
     
     try:
-        # Ensure data is loaded before processing control commands
-        if not telemetry_data_loaded:
-            try:
-                await load_telemetry_data()
-            except Exception as e:
-                print(f"⚠️ Error loading telemetry data: {e}")
-        
-        # Check if data is available
+        # Check if data is available (don't try to load here - it's too slow)
+        # Data loading happens in background during startup
         if not telemetry_data_loaded or len(telemetry_rows) == 0:
             return {
                 "status": "error",
                 "command": command.get("cmd"),
-                "message": "Telemetry data not loaded. Please wait for data to be loaded.",
-                "suggestion": "Ensure CSV files exist in logs/vehicles/ directory"
+                "message": "Telemetry data not loaded yet. Please wait for data to be loaded.",
+                "suggestion": "Data is loading in background. Poll /api/telemetry to check status.",
+                "data_loading": not telemetry_data_loaded
             }
         
+        # Process the control command (this is fast)
         await process_telemetry_control(command)
         return {
             "status": "command_sent",
