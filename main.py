@@ -1354,16 +1354,29 @@ async def get_vehicles(event_name: Optional[str] = None):
 @app.get("/api/telemetry")
 async def get_telemetry():
     """Get latest telemetry data - Poll this endpoint for updates"""
-    global telemetry_broadcast_task
+    global telemetry_broadcast_task, telemetry_data_loaded, telemetry_rows
     
     try:
-        # Start broadcast loop if not already running
+        # Ensure data is loaded first (non-blocking check)
+        if not telemetry_data_loaded:
+            try:
+                await load_telemetry_data()
+            except Exception as e:
+                print(f"⚠️ Error loading telemetry data: {e}")
+                return {
+                    "message": f"Error loading telemetry data: {str(e)}",
+                    "has_data": False,
+                    "status": "error"
+                }
+        
+        # Start broadcast loop if not already running (non-blocking)
         if telemetry_broadcast_task is None or telemetry_broadcast_task.done():
             try:
                 telemetry_broadcast_task = asyncio.create_task(telemetry_broadcast_loop())
                 print("Started telemetry broadcast loop for REST API")
             except Exception as e:
                 print(f"⚠️ Error starting telemetry broadcast loop: {e}")
+                # Don't fail the request if loop can't start
         
         if telemetry_cache:
             return telemetry_cache
@@ -1375,19 +1388,26 @@ async def get_telemetry():
                 "row_count": len(telemetry_rows),
                 "has_data": True,
                 "paused": telemetry_is_paused,
+                "status": "ready",
                 "suggestion": "Poll /api/telemetry for updates. Use /api/control to start playback."
             }
         
         return {
             "message": "No telemetry data available",
             "has_data": False,
+            "status": "no_data",
             "suggestion": "Ensure CSV files exist in logs/vehicles/ and data has been loaded"
         }
     except Exception as e:
         print(f"⚠️ Error in get_telemetry endpoint: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error retrieving telemetry: {str(e)}")
+        # Return 200 with error status instead of raising HTTPException to avoid 503 from proxies
+        return {
+            "message": f"Error retrieving telemetry: {str(e)}",
+            "has_data": False,
+            "status": "error"
+        }
 
 
 @app.get("/api/endurance")
@@ -1454,24 +1474,42 @@ async def get_endurance():
 @app.get("/api/leaderboard")
 async def get_leaderboard():
     """Get leaderboard data - Poll this endpoint for updates"""
-    global leaderboard_broadcast_task
+    global leaderboard_broadcast_task, leaderboard_data_loaded, leaderboard_cache, leaderboard_df
     
     try:
-        # Start broadcast loop if not already running
-        if leaderboard_broadcast_task is None or leaderboard_broadcast_task.done():
-            try:
-                leaderboard_broadcast_task = asyncio.create_task(leaderboard_broadcast_loop())
-                print("Started leaderboard broadcast loop for REST API")
-            except Exception as e:
-                print(f"⚠️ Error starting leaderboard broadcast loop: {e}")
-        
+        # Ensure data is loaded first (non-blocking check)
         if not leaderboard_data_loaded:
+            try:
+                await load_leaderboard_data()
+            except Exception as e:
+                print(f"⚠️ Error loading leaderboard data: {e}")
+                return {
+                    "leaderboard": [],
+                    "count": 0,
+                    "status": "error",
+                    "message": f"Error loading leaderboard data: {str(e)}"
+                }
+        
+        # If data file doesn't exist or couldn't be loaded, return empty response
+        if not leaderboard_data_loaded or leaderboard_df is None or len(leaderboard_df) == 0:
             return {
                 "leaderboard": [],
                 "count": 0,
-                "message": "Leaderboard data not loaded",
-                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory"
+                "message": "Leaderboard data not available yet",
+                "suggestion": "Ensure R1_leaderboard.csv exists in logs/ directory",
+                "status": "no_data"
             }
+        
+        # Start broadcast loop if not already running (non-blocking)
+        if leaderboard_broadcast_task is None or leaderboard_broadcast_task.done():
+            try:
+                leaderboard_broadcast_task = asyncio.create_task(leaderboard_broadcast_loop())
+                print("✅ Started leaderboard broadcast loop for REST API")
+            except Exception as e:
+                print(f"⚠️ Error starting leaderboard broadcast loop: {e}")
+                import traceback
+                traceback.print_exc()
+                # Don't fail the request if loop can't start
         
         if len(leaderboard_cache) == 0:
             return {
@@ -1479,28 +1517,70 @@ async def get_leaderboard():
                 "count": 0,
                 "message": "No leaderboard entries in cache yet",
                 "has_data": True,
-                "suggestion": "Poll /api/leaderboard for updates"
+                "suggestion": "Poll /api/leaderboard for updates",
+                "status": "empty_cache"
             }
         
         # Clean NaN values before returning
         cleaned_cache = clean_nan_values(leaderboard_cache)
-        return {"leaderboard": cleaned_cache, "count": len(cleaned_cache)}
+        print(f"✅ Returning {len(cleaned_cache)} leaderboard entries")
+        return {
+            "leaderboard": cleaned_cache,
+            "count": len(cleaned_cache),
+            "status": "success"
+        }
     except Exception as e:
-        print(f"⚠️ Error in get_leaderboard endpoint: {e}")
+        error_msg = f"Error retrieving leaderboard: {str(e)}"
+        print(f"⚠️ Error in get_leaderboard endpoint: {error_msg}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error retrieving leaderboard: {str(e)}")
+        # Return 200 with error status instead of raising HTTPException to avoid 503 from proxies
+        return {
+            "leaderboard": [],
+            "count": 0,
+            "status": "error",
+            "message": error_msg
+        }
 
 
 @app.post("/api/control")
 async def control_playback(command: dict):
     """Send control command to telemetry playback"""
+    global telemetry_data_loaded, telemetry_rows
+    
     try:
+        # Ensure data is loaded before processing control commands
+        if not telemetry_data_loaded:
+            try:
+                await load_telemetry_data()
+            except Exception as e:
+                print(f"⚠️ Error loading telemetry data: {e}")
+        
+        # Check if data is available
+        if not telemetry_data_loaded or len(telemetry_rows) == 0:
+            return {
+                "status": "error",
+                "command": command.get("cmd"),
+                "message": "Telemetry data not loaded. Please wait for data to be loaded.",
+                "suggestion": "Ensure CSV files exist in logs/vehicles/ directory"
+            }
+        
         await process_telemetry_control(command)
-        return {"status": "command_sent", "command": command.get("cmd")}
+        return {
+            "status": "command_sent",
+            "command": command.get("cmd"),
+            "message": "Command processed successfully"
+        }
     except Exception as e:
-        # Return error instead of crashing
-        raise HTTPException(status_code=500, detail=f"Error processing control command: {str(e)}")
+        print(f"⚠️ Error in control_playback endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return 200 with error status instead of raising HTTPException to avoid 503 from proxies
+        return {
+            "status": "error",
+            "command": command.get("cmd"),
+            "message": f"Error processing control command: {str(e)}"
+        }
 
 
 @app.post("/api/recording/start")
