@@ -276,6 +276,7 @@ leaderboard_cache: List = []
 telemetry_is_paused = True
 telemetry_is_reversed = False
 telemetry_has_started = False
+telemetry_race_finished = False  # Flag to track if race has finished
 telemetry_playback_speed = 1.0
 telemetry_master_start_time = None
 telemetry_playback_start_timestamp = None
@@ -865,7 +866,7 @@ async def telemetry_broadcast_loop():
     global telemetry_master_start_time, telemetry_playback_start_timestamp
     global telemetry_rows, telemetry_pending_rows, telemetry_has_started
     global telemetry_is_paused, telemetry_is_reversed, telemetry_playback_speed
-    global telemetry_cache
+    global telemetry_cache, telemetry_race_finished
 
     # Ensure data is loaded (should already be from startup, but check anyway)
     if not telemetry_data_loaded:
@@ -1010,73 +1011,122 @@ async def telemetry_broadcast_loop():
             
             # Data is cached and served via REST API (clients poll for updates)
 
-        # End condition
+        # End condition - Race finished, auto-stop everything
         if (not telemetry_pending_rows and not telemetry_is_reversed) or (not to_emit and telemetry_is_reversed):
-            print("End of telemetry log reached.")
+            print("🏁 Race finished - Auto-stopping all playback")
             end_msg = {
-                "type": "telemetry_end",
-                "timestamp": sim_time.isoformat()
+                "type": "race_finished",
+                "timestamp": sim_time.isoformat(),
+                "message": "Race completed - Winner decided. Playback stopped automatically."
             }
             # End message is cached and served via REST API
+            telemetry_cache = end_msg
             telemetry_is_paused = True
+            telemetry_race_finished = True
             telemetry_master_start_time = None
+            # Stop all broadcasts when race finishes
+            await asyncio.sleep(0.5)  # Brief pause before stopping
+            print("✅ All playback stopped - Race finished")
 
 
 async def process_telemetry_control(msg: dict):
-    """Process control commands for telemetry playback"""
-    global telemetry_is_paused, telemetry_is_reversed, telemetry_has_started
+    """Process control commands for telemetry playback with proper race lifecycle management"""
+    global telemetry_is_paused, telemetry_is_reversed, telemetry_has_started, telemetry_race_finished
     global telemetry_playback_speed, telemetry_master_start_time, telemetry_playback_start_timestamp
-    global telemetry_pending_rows, telemetry_rows
+    global telemetry_pending_rows, telemetry_rows, telemetry_cache
 
     cmd = msg.get("cmd")
-    if cmd == "play":
+    
+    # Handle "start" command - start race properly
+    if cmd == "start" or cmd == "play":
+        # If race was finished, reset it first
+        if telemetry_race_finished:
+            telemetry_race_finished = False
+            telemetry_playback_start_timestamp = telemetry_rows[0]["meta_time"] if telemetry_rows else None
+            telemetry_pending_rows = telemetry_rows.copy() if telemetry_rows else []
+            telemetry_master_start_time = None
+            print("🔄 Resetting race after completion - Starting new race")
+        
         if not telemetry_has_started:
-            # First time starting - initialize
+            # First time starting - initialize race
             telemetry_has_started = True
+            telemetry_race_finished = False
             if telemetry_rows:
                 telemetry_playback_start_timestamp = telemetry_rows[0]["meta_time"]
                 telemetry_pending_rows = telemetry_rows.copy()
-            print("Playback started for the first time")
+            print("🏁 Race started for the first time")
+        
+        # Start/resume playback
         if telemetry_is_paused:
             telemetry_is_paused = False
             telemetry_is_reversed = False
             telemetry_master_start_time = asyncio.get_event_loop().time()
-            print("Playback resumed/started")
+            if telemetry_race_finished:
+                print("⚠️ Race already finished - Use restart to start again")
+            else:
+                print("▶️ Race playback started/resumed")
+    
     elif cmd == "reverse":
-        if telemetry_is_paused and telemetry_has_started:
+        if telemetry_is_paused and telemetry_has_started and not telemetry_race_finished:
             telemetry_is_paused = False
             telemetry_is_reversed = True
             telemetry_master_start_time = asyncio.get_event_loop().time()
-            print("Reverse playback started")
+            print("⏪ Reverse playback started")
+        elif telemetry_race_finished:
+            print("⚠️ Race finished - Cannot reverse. Use restart to start again.")
+    
     elif cmd == "restart":
+        # Restart race from beginning
         telemetry_is_paused = True
         telemetry_is_reversed = False
         telemetry_has_started = True
-        telemetry_playback_start_timestamp = telemetry_rows[0]["meta_time"]
-        telemetry_pending_rows = telemetry_rows.copy()
+        telemetry_race_finished = False
+        if telemetry_rows:
+            telemetry_playback_start_timestamp = telemetry_rows[0]["meta_time"]
+            telemetry_pending_rows = telemetry_rows.copy()
         telemetry_master_start_time = None
-        print("Playback restarted")
+        # Clear race finished cache
+        telemetry_cache = {}
+        print("🔄 Race restarted from beginning")
+    
     elif cmd == "pause":
-        if not telemetry_is_paused:
+        if not telemetry_is_paused and not telemetry_race_finished:
             elapsed = asyncio.get_event_loop().time() - telemetry_master_start_time
             delta = -elapsed * telemetry_playback_speed if telemetry_is_reversed else elapsed * telemetry_playback_speed
             telemetry_playback_start_timestamp += pd.to_timedelta(delta, unit="s")
             telemetry_is_paused = True
             telemetry_master_start_time = None
-            print("Paused")
+            print("⏸️ Race paused")
+        elif telemetry_race_finished:
+            print("⚠️ Race already finished - Cannot pause")
+    
+    elif cmd == "stop":
+        # Stop race completely (different from pause)
+        if not telemetry_race_finished and telemetry_master_start_time:
+            elapsed = asyncio.get_event_loop().time() - telemetry_master_start_time
+            delta = -elapsed * telemetry_playback_speed if telemetry_is_reversed else elapsed * telemetry_playback_speed
+            telemetry_playback_start_timestamp += pd.to_timedelta(delta, unit="s")
+        telemetry_is_paused = True
+        telemetry_master_start_time = None
+        print("⏹️ Race stopped")
+    
     elif cmd == "speed":
         val = float(msg.get("value", 1.0))
-        if not telemetry_is_paused and telemetry_master_start_time:
+        if not telemetry_is_paused and telemetry_master_start_time and not telemetry_race_finished:
             elapsed = asyncio.get_event_loop().time() - telemetry_master_start_time
             delta = -elapsed * telemetry_playback_speed if telemetry_is_reversed else elapsed * telemetry_playback_speed
             telemetry_playback_start_timestamp += pd.to_timedelta(delta, unit="s")
             telemetry_master_start_time = asyncio.get_event_loop().time()
         telemetry_playback_speed = val
-        print(f"Speed set to {telemetry_playback_speed}x")
+        print(f"⚡ Speed set to {telemetry_playback_speed}x")
+    
     elif cmd == "seek":
-        telemetry_playback_start_timestamp = dtparser.parse(msg["timestamp"])
-        telemetry_master_start_time = asyncio.get_event_loop().time()
-        print(f"Seek to {telemetry_playback_start_timestamp}")
+        if not telemetry_race_finished:
+            telemetry_playback_start_timestamp = dtparser.parse(msg["timestamp"])
+            telemetry_master_start_time = asyncio.get_event_loop().time()
+            print(f"⏩ Seek to {telemetry_playback_start_timestamp}")
+        else:
+            print("⚠️ Race finished - Cannot seek. Use restart to start again.")
 
 
 # ==================== ENDURANCE BROADCAST ====================
@@ -1513,14 +1563,17 @@ async def get_telemetry():
                 except Exception as e:
                     print(f"⚠️ Error starting telemetry broadcast loop: {e}")
             
-            return {
+            # Check race status
+            status_msg = {
                 "message": "Telemetry data loaded but playback not started",
                 "row_count": len(telemetry_rows),
                 "has_data": True,
                 "paused": telemetry_is_paused,
-                "status": "ready",
-                "suggestion": "Poll /api/telemetry for updates. Use /api/control to start playback."
+                "race_finished": telemetry_race_finished,
+                "status": "race_finished" if telemetry_race_finished else ("paused" if telemetry_is_paused else "playing"),
+                "suggestion": "Race finished - Use restart command to start again." if telemetry_race_finished else ("Poll /api/telemetry for updates. Use /api/control to start playback." if telemetry_is_paused else "Race is playing")
             }
+            return status_msg
         
         # If data not loaded, return immediately without blocking
         # Data loading happens in background during startup
@@ -1683,8 +1736,8 @@ async def get_leaderboard():
 
 @app.post("/api/control")
 async def control_playback(command: dict):
-    """Send control command to telemetry playback"""
-    global telemetry_data_loaded, telemetry_rows
+    """Send control command to telemetry playback with race lifecycle management"""
+    global telemetry_data_loaded, telemetry_rows, telemetry_is_paused, telemetry_race_finished
     
     try:
         # Check if data is available (don't try to load here - it's too slow)
@@ -1700,10 +1753,17 @@ async def control_playback(command: dict):
         
         # Process the control command (this is fast)
         await process_telemetry_control(command)
+        
+        # Return status with race state
         return {
-            "status": "command_sent",
+            "status": "success",
             "command": command.get("cmd"),
-            "message": "Command processed successfully"
+            "message": "Command processed successfully",
+            "race_state": {
+                "paused": telemetry_is_paused,
+                "finished": telemetry_race_finished,
+                "playing": not telemetry_is_paused and not telemetry_race_finished
+            }
         }
     except Exception as e:
         print(f"⚠️ Error in control_playback endpoint: {e}")
