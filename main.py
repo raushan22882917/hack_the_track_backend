@@ -612,14 +612,26 @@ async def load_telemetry_data(event_name: Optional[str] = None):
             vehicle_id = os.path.splitext(os.path.basename(f))[0]
             df = pd.read_csv(f, parse_dates=["meta_time"], low_memory=False)
             df["meta_time"] = pd.to_datetime(df["meta_time"], utc=True, errors="coerce")
+            # Filter out rows with invalid timestamps
+            df = df.dropna(subset=["meta_time"])
+            if len(df) == 0:
+                print(f"⚠️ WARNING: {vehicle_id} has no valid timestamps - skipping")
+                return None
             df["vehicle_id"] = vehicle_id
+            print(f"✅ Loaded {vehicle_id}: {len(df)} records")
             return df
         except Exception as e:
             print(f"⚠️ ERROR: Failed to load {f}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
-    # Load files concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    # Load ALL files in parallel with maximum workers for optimal performance
+    # Use more workers for better parallelization (up to number of files or CPU cores)
+    max_workers = min(len(vehicle_files), os.cpu_count() or 8, 20)  # Cap at 20 to avoid too many threads
+    print(f"🚀 Loading {len(vehicle_files)} vehicle files in parallel using {max_workers} workers...")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         dfs = await asyncio.gather(*[
             loop.run_in_executor(executor, load_file, f) 
             for f in vehicle_files
@@ -632,9 +644,16 @@ async def load_telemetry_data(event_name: Optional[str] = None):
         print("⚠️ WARNING: No vehicle telemetry data could be loaded.")
         return False
     
+    print(f"✅ Successfully loaded {len(dfs)} out of {len(vehicle_files)} vehicle files")
+    
     # Combine and sort
     telemetry_df = pd.concat(dfs, ignore_index=True)
     telemetry_df = telemetry_df.sort_values("meta_time").reset_index(drop=True)
+    
+    # Get unique vehicle IDs to verify all vehicles are loaded
+    unique_vehicles_loaded = telemetry_df["vehicle_id"].unique().tolist()
+    print(f"📊 Vehicles with telemetry data: {len(unique_vehicles_loaded)}")
+    print(f"   Vehicle IDs: {sorted(unique_vehicles_loaded)}")
     
     # Convert to list of dicts (only once, after sorting)
     # Use list() to avoid keeping reference to DataFrame
@@ -647,6 +666,12 @@ async def load_telemetry_data(event_name: Optional[str] = None):
     
     print(f"✅ Loaded {len(telemetry_df)} telemetry records from {len(dfs)} vehicle files")
     print(f"   Data range: {telemetry_rows[0]['meta_time'] if telemetry_rows else 'N/A'} to {telemetry_rows[-1]['meta_time'] if telemetry_rows else 'N/A'}")
+    
+    # Warn if fewer vehicles loaded than files found
+    if len(unique_vehicles_loaded) < len(vehicle_files):
+        missing_count = len(vehicle_files) - len(unique_vehicles_loaded)
+        print(f"⚠️ WARNING: {missing_count} vehicle file(s) were found but have no valid telemetry data")
+        print(f"   Expected: {len(vehicle_files)} vehicles, Loaded: {len(unique_vehicles_loaded)} vehicles")
     
     telemetry_data_loaded = True
     print("✅ Telemetry data pre-loaded and ready!")
@@ -1347,7 +1372,7 @@ def read_csv_first_row_fast(vehicle_file: str) -> dict:
     """
     result = {}
     try:
-        with open(vehicle_file, 'r', encoding='utf-8') as f:
+        with open(vehicle_file, 'r', encoding='utf-8', errors='ignore') as f:
             reader = csv.DictReader(f)
             first_row = next(reader, None)
             if first_row:
@@ -1416,39 +1441,60 @@ async def get_vehicles(event_name: Optional[str] = None):
             _vehicles_cache[cache_key] = result
         return result
     
+    print(f"🔍 Found {len(vehicle_files)} vehicle CSV files in {vehicles_dir}")
+    
     # Read CSV metadata in parallel for faster performance
     loop = asyncio.get_event_loop()
     
     def process_vehicle_file(vehicle_file: str) -> dict:
-        """Process a single vehicle file to extract metadata"""
-        vehicle_id = os.path.splitext(os.path.basename(vehicle_file))[0]
-        vehicle_info = vehicle_mapping.get(vehicle_id, {})
-        
-        # Get driver_number and car_number from mapping first
-        driver_number = vehicle_info.get("driver_number")
-        car_number = vehicle_info.get("car_number")
-        
-        # Only read CSV if metadata not in mapping (fallback)
-        if driver_number is None or car_number is None:
-            csv_metadata = read_csv_first_row_fast(vehicle_file)
-            if driver_number is None and 'driver_number' in csv_metadata:
-                driver_number = csv_metadata['driver_number']
-            if car_number is None and 'car_number' in csv_metadata:
-                car_number = csv_metadata['car_number']
-        
-        return {
-            "id": vehicle_id,
-            "name": vehicle_id,
-            "file": os.path.basename(vehicle_file),
-            "vehicle_number": vehicle_info.get("vehicle_number"),
-            "car_number": car_number,
-            "driver_number": driver_number,
-            "has_endurance_data": vehicle_info.get("has_endurance_data", False),
-            "event_name": event_name
-        }
+        """Process a single vehicle file to extract metadata - optimized for parallel execution"""
+        try:
+            vehicle_id = os.path.splitext(os.path.basename(vehicle_file))[0]
+            vehicle_info = vehicle_mapping.get(vehicle_id, {})
+            
+            # Get driver_number and car_number from mapping first (fastest path)
+            driver_number = vehicle_info.get("driver_number")
+            car_number = vehicle_info.get("car_number")
+            
+            # Only read CSV if metadata not in mapping (fallback - parallel safe)
+            if driver_number is None or car_number is None:
+                csv_metadata = read_csv_first_row_fast(vehicle_file)
+                if driver_number is None and 'driver_number' in csv_metadata:
+                    driver_number = csv_metadata['driver_number']
+                if car_number is None and 'car_number' in csv_metadata:
+                    car_number = csv_metadata['car_number']
+            
+            return {
+                "id": vehicle_id,
+                "name": vehicle_id,
+                "file": os.path.basename(vehicle_file),
+                "vehicle_number": vehicle_info.get("vehicle_number"),
+                "car_number": car_number,
+                "driver_number": driver_number,
+                "has_endurance_data": vehicle_info.get("has_endurance_data", False),
+                "event_name": event_name
+            }
+        except Exception as e:
+            # Return basic info even if processing fails (ensures all vehicles are included)
+            vehicle_id = os.path.splitext(os.path.basename(vehicle_file))[0]
+            print(f"⚠️ Warning: Error processing {vehicle_id}: {e}")
+            return {
+                "id": vehicle_id,
+                "name": vehicle_id,
+                "file": os.path.basename(vehicle_file),
+                "vehicle_number": None,
+                "car_number": None,
+                "driver_number": None,
+                "has_endurance_data": False,
+                "event_name": event_name
+            }
     
-    # Process files in parallel using ThreadPoolExecutor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    # Process ALL files in parallel using ThreadPoolExecutor with optimal worker count
+    # Use more workers for better parallelization when fetching vehicle metadata
+    max_workers = min(len(vehicle_files), os.cpu_count() or 8, 20)  # Cap at 20 to avoid too many threads
+    print(f"🚀 Processing {len(vehicle_files)} vehicle files in parallel using {max_workers} workers...")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         vehicles = await asyncio.gather(*[
             loop.run_in_executor(executor, process_vehicle_file, f)
             for f in vehicle_files
@@ -1457,11 +1503,14 @@ async def get_vehicles(event_name: Optional[str] = None):
     # Sort vehicles by ID
     vehicles.sort(key=lambda x: x["id"])
     
+    print(f"✅ Successfully processed {len(vehicles)} vehicles in parallel")
+    
     result = {
         "vehicles": vehicles,
         "count": len(vehicles),
         "event_name": event_name,
-        "source_dir": str(vehicles_dir)
+        "source_dir": str(vehicles_dir),
+        "loaded_at": datetime.now().isoformat()
     }
     
     # Cache the result
