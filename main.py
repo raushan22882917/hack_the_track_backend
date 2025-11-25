@@ -569,6 +569,12 @@ async def load_telemetry_data(event_name: Optional[str] = None):
     global telemetry_rows, telemetry_pending_rows, telemetry_df, telemetry_data_loaded
     global telemetry_playback_start_timestamp
     
+    # Clear vehicles cache when loading new data
+    cache_key = event_name or "default"
+    with _vehicles_cache_lock:
+        if cache_key in _vehicles_cache:
+            del _vehicles_cache[cache_key]
+    
     if telemetry_data_loaded and event_name is None:
         return True
     
@@ -1280,15 +1286,56 @@ async def health_check():
         }
 
 
+# Cache for vehicle lists (key: (event_name or None), value: vehicle list)
+_vehicles_cache = {}
+_vehicles_cache_lock = Lock()
+
+def read_csv_first_row_fast(vehicle_file: str) -> dict:
+    """
+    Fast method to read just the first row of a CSV file using Python's csv module.
+    Much faster than pandas for reading just metadata.
+    """
+    result = {}
+    try:
+        with open(vehicle_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            first_row = next(reader, None)
+            if first_row:
+                # Try to get driver_number and car_number from first row
+                if 'driver_number' in first_row and first_row['driver_number']:
+                    try:
+                        result['driver_number'] = int(float(first_row['driver_number']))
+                    except (ValueError, TypeError):
+                        pass
+                if 'car_number' in first_row and first_row['car_number']:
+                    try:
+                        result['car_number'] = int(float(first_row['car_number']))
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass
+    return result
+
 @app.get("/api/vehicles")
 async def get_vehicles(event_name: Optional[str] = None):
     """
     Get list of all available vehicles from telemetry data with driver numbers
     
+    Optimized for performance:
+    - Uses parallel file reading
+    - Fast CSV metadata extraction
+    - Caching to avoid re-reading files
+    
     Args:
         event_name: Optional event name to get vehicles from a specific event.
                    If None, uses default logs/vehicles directory
     """
+    # Check cache first
+    cache_key = event_name or "default"
+    with _vehicles_cache_lock:
+        if cache_key in _vehicles_cache:
+            return _vehicles_cache[cache_key]
+    
     project_root = get_project_root()
     
     # Determine which directory to use
@@ -1298,7 +1345,10 @@ async def get_vehicles(event_name: Optional[str] = None):
         vehicles_dir = project_root / "logs" / "vehicles"
     
     if not vehicles_dir.exists():
-        return {"vehicles": [], "count": 0, "event_name": event_name}
+        result = {"vehicles": [], "count": 0, "event_name": event_name}
+        with _vehicles_cache_lock:
+            _vehicles_cache[cache_key] = result
+        return result
     
     # Import vehicle mapping to get driver numbers
     try:
@@ -1309,27 +1359,34 @@ async def get_vehicles(event_name: Optional[str] = None):
     
     # Get all CSV files in vehicles directory
     vehicle_files = glob.glob(str(vehicles_dir / "*.csv"))
-    vehicles = []
     
-    for vehicle_file in vehicle_files:
+    if not vehicle_files:
+        result = {"vehicles": [], "count": 0, "event_name": event_name, "source_dir": str(vehicles_dir)}
+        with _vehicles_cache_lock:
+            _vehicles_cache[cache_key] = result
+        return result
+    
+    # Read CSV metadata in parallel for faster performance
+    loop = asyncio.get_event_loop()
+    
+    def process_vehicle_file(vehicle_file: str) -> dict:
+        """Process a single vehicle file to extract metadata"""
         vehicle_id = os.path.splitext(os.path.basename(vehicle_file))[0]
         vehicle_info = vehicle_mapping.get(vehicle_id, {})
         
-        # Try to get driver number from CSV file if not in mapping
+        # Get driver_number and car_number from mapping first
         driver_number = vehicle_info.get("driver_number")
         car_number = vehicle_info.get("car_number")
         
-        # Read first row of CSV to get driver_number if available
-        try:
-            df_sample = pd.read_csv(vehicle_file, nrows=1)
-            if 'driver_number' in df_sample.columns and pd.notna(df_sample['driver_number'].iloc[0]):
-                driver_number = int(df_sample['driver_number'].iloc[0])
-            if 'car_number' in df_sample.columns and pd.notna(df_sample['car_number'].iloc[0]):
-                car_number = int(df_sample['car_number'].iloc[0])
-        except Exception:
-            pass
+        # Only read CSV if metadata not in mapping (fallback)
+        if driver_number is None or car_number is None:
+            csv_metadata = read_csv_first_row_fast(vehicle_file)
+            if driver_number is None and 'driver_number' in csv_metadata:
+                driver_number = csv_metadata['driver_number']
+            if car_number is None and 'car_number' in csv_metadata:
+                car_number = csv_metadata['car_number']
         
-        vehicles.append({
+        return {
             "id": vehicle_id,
             "name": vehicle_id,
             "file": os.path.basename(vehicle_file),
@@ -1338,17 +1395,54 @@ async def get_vehicles(event_name: Optional[str] = None):
             "driver_number": driver_number,
             "has_endurance_data": vehicle_info.get("has_endurance_data", False),
             "event_name": event_name
-        })
+        }
+    
+    # Process files in parallel using ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        vehicles = await asyncio.gather(*[
+            loop.run_in_executor(executor, process_vehicle_file, f)
+            for f in vehicle_files
+        ])
     
     # Sort vehicles by ID
     vehicles.sort(key=lambda x: x["id"])
     
-    return {
+    result = {
         "vehicles": vehicles,
         "count": len(vehicles),
         "event_name": event_name,
         "source_dir": str(vehicles_dir)
     }
+    
+    # Cache the result
+    with _vehicles_cache_lock:
+        _vehicles_cache[cache_key] = result
+    
+    return result
+
+
+@app.post("/api/vehicles/clear-cache")
+async def clear_vehicles_cache(request: dict = Body(None)):
+    """
+    Clear the vehicles cache (useful after updating vehicle data)
+    
+    Request body (optional):
+    {
+        "event_name": "event_name"  # Optional event name to clear cache for specific event.
+                                    # If not provided, clears default cache
+    }
+    """
+    event_name = None
+    if request:
+        event_name = request.get("event_name")
+    
+    cache_key = event_name or "default"
+    with _vehicles_cache_lock:
+        if cache_key in _vehicles_cache:
+            del _vehicles_cache[cache_key]
+            return {"status": "success", "message": f"Cache cleared for event: {event_name or 'default'}"}
+        else:
+            return {"status": "success", "message": "Cache was already empty"}
 
 
 @app.get("/api/telemetry")
