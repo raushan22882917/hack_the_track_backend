@@ -1445,6 +1445,54 @@ async def clear_vehicles_cache(request: dict = Body(None)):
             return {"status": "success", "message": "Cache was already empty"}
 
 
+@app.get("/api/init")
+async def initialize_race(event_name: Optional[str] = None):
+    """
+    Combined initialization endpoint that loads all race data in parallel.
+    Returns vehicles, telemetry status, endurance status, and leaderboard status.
+    
+    This endpoint is optimized for fast frontend initialization - all data loading
+    happens in parallel to minimize wait time.
+    
+    Args:
+        event_name: Optional event name to initialize data for a specific event.
+                   If None, uses default logs/vehicles directory
+    """
+    # Load all data in parallel using asyncio.gather
+    vehicles_task = get_vehicles(event_name)
+    telemetry_task = get_telemetry()
+    endurance_task = get_endurance()
+    leaderboard_task = get_leaderboard()
+    
+    # Execute all tasks in parallel
+    vehicles_result, telemetry_result, endurance_result, leaderboard_result = await asyncio.gather(
+        vehicles_task,
+        telemetry_task,
+        endurance_task,
+        leaderboard_task,
+        return_exceptions=True
+    )
+    
+    # Handle any exceptions gracefully
+    if isinstance(vehicles_result, Exception):
+        vehicles_result = {"vehicles": [], "count": 0, "error": str(vehicles_result)}
+    if isinstance(telemetry_result, Exception):
+        telemetry_result = {"status": "error", "message": str(telemetry_result)}
+    if isinstance(endurance_result, Exception):
+        endurance_result = {"events": [], "count": 0, "status": "error", "message": str(endurance_result)}
+    if isinstance(leaderboard_result, Exception):
+        leaderboard_result = {"leaderboard": [], "count": 0, "status": "error", "message": str(leaderboard_result)}
+    
+    return {
+        "vehicles": vehicles_result,
+        "telemetry": telemetry_result,
+        "endurance": endurance_result,
+        "leaderboard": leaderboard_result,
+        "event_name": event_name,
+        "initialized_at": datetime.now().isoformat()
+    }
+
+
 @app.get("/api/telemetry")
 async def get_telemetry():
     """Get latest telemetry data - Poll this endpoint for updates"""
@@ -1514,18 +1562,16 @@ async def get_endurance():
         if endurance_cache is None:
             endurance_cache = []
         
-        # Ensure data is loaded first (non-blocking check)
+        # Check if data is loaded (non-blocking check)
+        # Don't load here if not loaded - let background loading handle it
+        # This prevents blocking when called in parallel with other endpoints
         if not endurance_data_loaded:
-            try:
-                await load_endurance_data()
-            except Exception as e:
-                print(f"⚠️ Error loading endurance data: {e}")
-                return {
-                    "events": [],
-                    "count": 0,
-                    "status": "error",
-                    "message": f"Error loading endurance data: {str(e)}"
-                }
+            return {
+                "events": [],
+                "count": 0,
+                "status": "loading",
+                "message": "Endurance data is loading in background. Poll again for updates."
+            }
         
         # If data file doesn't exist or couldn't be loaded, return empty response
         if not endurance_data_loaded or endurance_df is None or len(endurance_df) == 0:
@@ -1571,18 +1617,16 @@ async def get_leaderboard():
     global leaderboard_broadcast_task, leaderboard_data_loaded, leaderboard_cache, leaderboard_df
     
     try:
-        # Ensure data is loaded first (non-blocking check)
+        # Check if data is loaded (non-blocking check)
+        # Don't load here if not loaded - let background loading handle it
+        # This prevents blocking when called in parallel with other endpoints
         if not leaderboard_data_loaded:
-            try:
-                await load_leaderboard_data()
-            except Exception as e:
-                print(f"⚠️ Error loading leaderboard data: {e}")
-                return {
-                    "leaderboard": [],
-                    "count": 0,
-                    "status": "error",
-                    "message": f"Error loading leaderboard data: {str(e)}"
-                }
+            return {
+                "leaderboard": [],
+                "count": 0,
+                "status": "loading",
+                "message": "Leaderboard data is loading in background. Poll again for updates."
+            }
         
         # If data file doesn't exist or couldn't be loaded, return empty response
         if not leaderboard_data_loaded or leaderboard_df is None or len(leaderboard_df) == 0:
@@ -3087,26 +3131,44 @@ async def startup_event():
     
     # Start data loading in background (non-blocking) so server can start immediately
     # This is critical for Cloud Run which has startup timeout requirements
+    # Load all data in PARALLEL for maximum performance
     async def load_data_background():
-        """Background task to load data without blocking server startup"""
-        try:
-            print("🚀 Starting data pre-loading in background...")
-            await load_telemetry_data()
-        except Exception as e:
-            print(f"⚠️ Warning: Error loading telemetry data: {e}")
-        try:
-            await load_endurance_data()
-        except Exception as e:
-            print(f"⚠️ Warning: Error loading endurance data: {e}")
-        try:
-            await load_leaderboard_data()
-        except Exception as e:
-            print(f"⚠️ Warning: Error loading leaderboard data: {e}")
-        try:
-            await load_predictive_models()
-        except Exception as e:
-            print(f"⚠️ Warning: Error loading predictive models: {e}")
-        print("✅ Background data loading completed")
+        """Background task to load data without blocking server startup - ALL IN PARALLEL"""
+        print("🚀 Starting parallel data pre-loading in background...")
+        
+        # Load all data sources in parallel using asyncio.gather
+        results = await asyncio.gather(
+            load_telemetry_data(),
+            load_endurance_data(),
+            load_leaderboard_data(),
+            load_predictive_models(),
+            return_exceptions=True
+        )
+        
+        # Log results
+        telemetry_ok, endurance_ok, leaderboard_ok, models_ok = results
+        
+        if isinstance(telemetry_ok, Exception):
+            print(f"⚠️ Warning: Error loading telemetry data: {telemetry_ok}")
+        elif telemetry_ok:
+            print("✅ Telemetry data loaded")
+            
+        if isinstance(endurance_ok, Exception):
+            print(f"⚠️ Warning: Error loading endurance data: {endurance_ok}")
+        elif endurance_ok:
+            print("✅ Endurance data loaded")
+            
+        if isinstance(leaderboard_ok, Exception):
+            print(f"⚠️ Warning: Error loading leaderboard data: {leaderboard_ok}")
+        elif leaderboard_ok:
+            print("✅ Leaderboard data loaded")
+            
+        if isinstance(models_ok, Exception):
+            print(f"⚠️ Warning: Error loading predictive models: {models_ok}")
+        else:
+            print("✅ Predictive models loaded")
+            
+        print("✅ Parallel background data loading completed")
     
     # Start background task immediately without waiting
     asyncio.create_task(load_data_background())
